@@ -60,3 +60,11 @@ delete:
 	aws cloudformation delete-stack \
 		--stack-name $(STACKNAME) \
 		--region $(STACKREGION)
+
+.PHONY: depcheck
+.SILENT: depcheck
+depcheck:
+	echo "aws-cli: $(shell aws --version)";
+	echo "kubectl: $(shell kubectl version --client=true --short)";
+	echo "Current AWS IAM: $(shell aws sts get-caller-identity | jq -r '.Arn')";
+	echo;
