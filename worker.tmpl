@@ -192,7 +192,7 @@ Resources:
             #!/bin/bash
             set -o xtrace
             
-            /etc/eks/bootstrap.sh ${ClusterName} --apiserver-endpoint ${MasterEndpoint} --b64-cluster-ca ${MasterCaCert} --dns-cluster-ip 169.254.20.10 ${BootstrapArguments}
+            /etc/eks/bootstrap.sh ${ClusterName} --apiserver-endpoint ${MasterEndpoint} --b64-cluster-ca ${MasterCaCert} --dns-cluster-ip 169.254.20.10\",\"172.20.0.10 ${BootstrapArguments}
 
             /opt/aws/bin/cfn-signal --exit-code $? \
                      --stack  ${AWS::StackName} \
