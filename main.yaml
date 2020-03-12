@@ -374,8 +374,6 @@ Resources:
   
   WorkerNodes:
     Type: AWS::CloudFormation::Stack
-    DependsOn:
-    - EKSCluster
     Properties:
       TemplateURL: ./worker.yaml
       Parameters:
@@ -389,6 +387,8 @@ Resources:
           - Fn::GetAtt:
             - Vpc
             - Outputs.PrivateSubnetIds
+        MasterCaCert: !GetAtt EKSCluster.CertificateAuthorityData
+        MasterEndpoint: !GetAtt EKSCluster.Endpoint
         NodeNetworking: !Ref NodeNetworking
         NodeAutoScalingGroupMinSize: !Ref NodeAutoScalingGroupMinSize
         NodeAutoScalingGroupMaxSize: !Ref NodeAutoScalingGroupMaxSize
