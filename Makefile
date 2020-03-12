@@ -66,5 +66,6 @@ delete:
 depcheck:
 	echo "aws-cli: $(shell aws --version)";
 	echo "kubectl: $(shell kubectl version --client=true --short)";
+	echo "cfn-lint: $(shell cfn-lint --version)";
 	echo "Current AWS IAM: $(shell aws sts get-caller-identity | jq -r '.Arn')";
 	echo;
