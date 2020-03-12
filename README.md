@@ -3,6 +3,7 @@
 ### Prerequisites
 - awscli => 1.16.302
 - kubectl => 1.14.0
+- cfn-lint => 0.27.3
 - IAM role or user configured for awscli with Administrator policy
 
 
