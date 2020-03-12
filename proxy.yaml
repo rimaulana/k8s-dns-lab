@@ -1,0 +1,263 @@
+---
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Amazon EKS - Proxy infrastructure'
+
+Parameters:
+  ClusterName:
+    Type: String
+    Description: Give the name of EKS cluster
+
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: Define VPC ID where proxy servers will be deployed
+
+  PrimaryVpcCidr:
+    Type: String
+    Default: 10.123.0.0/16
+    AllowedPattern: ^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])(\/([0-9]|[1-2][0-9]|3[0-2]))$
+    Description: Define primary CIDR range for the VPC. This should be a valid private (RFC 1918) CIDR range.
+
+  SecondaryVpcCidr:
+    Type: String
+    Default: 100.64.0.0/16
+    AllowedPattern: ^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])(\/([0-9]|[1-2][0-9]|3[0-2]))$
+    Description: Define secondary CIDR range for the VPC. This should be a valid private (RFC 1918) CIDR range.
+
+  AllowedSshCidr:
+    Type: String
+    Default: 0.0.0.0/0
+    AllowedPattern: ^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])(\/([0-9]|[1-2][0-9]|3[0-2]))$
+    Description: Define the CIDR block where proxy server will open its SSH port for.
+
+  PublicSubnets:
+    Type: String
+    Description: Define public subnets on VPC for proxy server, multiple Subnet Ids separated by a comma subnet-123,subnet-456
+
+  PrivateSubnets:
+    Type: String
+    Description: Define private subnets on VPC for proxy server, multiple Subnet Ids separated by a comma subnet-123,subnet-456
+
+  ProxyAmiId:
+    Type: AWS::EC2::Image::Id
+    Description: Define AWS Linux 2 ImageId uses to create proxy server
+
+  KeyName:
+    Type: String
+    Default: rmaulan-testbed
+    Description: SSH key name to enable SSH access to proxy server and worker nodes
+
+  ProxyPort:
+    Type: Number
+    Default: 3128
+    Description: Define the port number on proxy server for proxy server process to open and listen
+
+  ProxyNumber:
+    Type: Number
+    Default: 3
+    Description: Define the number of proxy server serving in the cluster.
+
+  ProxyInstanceType:
+    Type: String
+    Default: t3a.small
+    Description: Choose proxy server instance type.
+    AllowedValues: 
+    - t3a.small
+    - t3a.medium
+    - t3a.large
+    - t3a.xlarge
+  
+  ProxySecurityGroup:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: Security group for proxy servers
+    
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+    - Label:
+        default: "EKS Cluster Configurations"
+      Parameters:
+      - ClusterName
+
+    - Label:
+        default: "VPC Configurations"
+      Parameters:
+      - VpcId
+      - PrimaryVpcCidr
+      - SecondaryVpcCidr
+      - PublicSubnets
+      - PrivateSubnets
+
+    - Label:
+        default: "Proxy Configurations"
+      Parameters:
+      - ProxyAmiId
+      - ProxyInstanceType
+      - ProxyNumber
+      - ProxyPort
+      - ProxySecurityGroup
+    
+    - Label:
+        default: "EC2 Instance Accessibility"
+      Parameters:
+      - AllowedSshCidr
+      - KeyName
+
+Resources:
+  
+  IngressPrimaryVpcCidr:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref ProxySecurityGroup
+      CidrIp: !Ref PrimaryVpcCidr
+      Description: !Sub "Allow internal traffic to port ${ProxyPort} from primary CIDR"
+      FromPort: !Ref ProxyPort
+      ToPort: !Ref ProxyPort
+      IpProtocol: TCP
+      
+  IngressSecondaryVpcCidr:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref ProxySecurityGroup
+      CidrIp: !Ref SecondaryVpcCidr
+      Description: !Sub "Allow internal traffic to port ${ProxyPort} from secondary CIDR"
+      FromPort: !Ref ProxyPort
+      ToPort: !Ref ProxyPort
+      IpProtocol: TCP
+  
+  IngressAllowSSH:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      CidrIp: !Ref AllowedSshCidr
+      GroupId: !Ref ProxySecurityGroup
+      Description: Allow SSH access from allowed CIDR range
+      FromPort: 22
+      ToPort: 22
+      IpProtocol: TCP
+      
+
+  ProxyASG:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      DesiredCapacity: !Ref ProxyNumber
+      LaunchConfigurationName: !Ref ProxyLaunchConfig
+      TargetGroupARNs:
+      - !Ref ProxyTargetGroup
+      MinSize: !Ref ProxyNumber
+      MaxSize: !Ref ProxyNumber
+      VPCZoneIdentifier:
+        Fn::Split:
+        - ','
+        - !Ref PublicSubnets
+      Tags:
+      - Key: Name
+        Value: !Sub '${ClusterName}-proxy-asg'
+        PropagateAtLaunch: true
+      - Key: auto-delete
+        Value: "no"
+        PropagateAtLaunch: true
+    CreationPolicy:
+      ResourceSignal:
+        Count: !Ref ProxyNumber
+        Timeout: PT10M
+    
+  NetworkLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Scheme: internal
+      Subnets:
+        Fn::Split:
+        - ','
+        - !Ref PrivateSubnets
+      Type: network
+      Tags:
+      - Key: auto-delete
+        Value: "no"
+      - Key: Name
+        Value: !Sub '${ClusterName}-proxy-nlb'
+
+  ProxyTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Port: !Ref ProxyPort
+      Protocol: TCP
+      TargetType: instance
+      VpcId: !Ref VpcId
+      Tags:
+      - Key: Name
+        Value: !Sub '${ClusterName}-proxy-target-group'
+      - Key: auto-delete
+        Value: "no"
+  
+  NLBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref NetworkLoadBalancer
+      Port: !Ref ProxyPort
+      Protocol: TCP
+      DefaultActions:
+      - Type: forward
+        TargetGroupArn: !Ref ProxyTargetGroup
+  
+  ProxyLaunchConfig:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    Metadata:
+      AWS::CloudFormation::Init:
+        configSets:
+          install:
+          - enable_epel
+          - install
+        enable_epel:
+          commands:
+            01_enable_epel:
+              command: yum install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-7.noarch.rpm
+        install:
+          packages:
+            yum:
+              tinyproxy: []
+          files:
+            /home/ec2-user/update-config.sh:
+              content: !Sub |
+                #!/bin/bash
+                sed -i 's/^Port 8888/Port ${ProxyPort}/' /etc/tinyproxy/tinyproxy.conf
+                echo "Allow ${PrimaryVpcCidr}" >> /etc/tinyproxy/tinyproxy.conf
+                echo "Allow ${SecondaryVpcCidr}" >> /etc/tinyproxy/tinyproxy.conf
+              mode: '000744'
+              owner: root
+              group: root
+          commands:
+            01_update_config:
+              command: /bin/bash /home/ec2-user/update-config.sh
+            02_remove_updater:
+              command: rm /home/ec2-user/update-config.sh
+          services:
+            sysvinit:
+              tinyproxy:
+                enabled: true
+                ensureRunning: true 
+    Properties:
+      AssociatePublicIpAddress: true
+      ImageId: !Ref ProxyAmiId
+      InstanceType: !Ref ProxyInstanceType
+      KeyName: !Ref KeyName
+      SecurityGroups:
+      - !Ref ProxySecurityGroup
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeSize: 8
+            VolumeType: gp2
+            DeleteOnTermination: true
+      UserData:
+        Fn::Base64:
+          !Sub |
+            #!/bin/bash
+            set -o xtrace
+            /opt/aws/bin/cfn-init -v --stack ${AWS::StackName} --resource ProxyLaunchConfig --configsets install --region ${AWS::Region}
+            /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource ProxyASG --region ${AWS::Region}
+
+Outputs:
+  ProxyAddr:
+    Description: NLB private DNS name
+    Value: !Sub "http://${NetworkLoadBalancer.DNSName}:${ProxyPort}"
+            
+      

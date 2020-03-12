@@ -1,0 +1,152 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: VPC Custom DNS Servers
+Parameters:
+  ClusterName:
+    Type: String
+    Description: Give the name of EKS cluster
+    
+  DNSENI:
+    Type: String
+    Description: Comma separated list of DNS ENIs
+  
+  AmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: '/aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2'
+    Description: DO NOT CHANGE - this variable will configure DNS server AMI to the latest Amazon Linux 2 AMI ID
+  
+  KeyName:
+    Type: String
+    Default: rmaulan-testbed
+    Description: SSH key name to enable SSH access to proxy server and worker nodes
+  
+  DNSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: Choose security group for worker node
+  
+  # PrivateSubnets:
+  #   Type: String
+  #   Description: Define private subnets on VPC for DNS server, multiple Subnet Ids separated by comma subnet-123,subnet-456
+  
+  DNSInstanceType:
+    Type: String
+    Default: t3a.small
+    Description: Choose DNS server instance type.
+    AllowedValues: 
+    - t3a.small
+    - t3a.medium
+    - t3a.large
+    - t3a.xlarge
+  
+  AllowSSHFrom:
+    Type: String
+    Description: Range of addresses allowed to SSH into Bastion
+    AllowedPattern: ^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])(\/([0-9]|[1-2][0-9]|3[0-2]))$
+    Default: 0.0.0.0/0
+
+Resources:
+  IngressAllowSSH:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      CidrIp: !Ref AllowSSHFrom
+      GroupId: !Ref DNSSecurityGroup
+      Description: Allow SSH access from allowed CIDR range
+      FromPort: 22
+      ToPort: 22
+      IpProtocol: TCP
+        
+  DNSLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties: 
+      LaunchTemplateData: 
+        BlockDeviceMappings: 
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeSize: 50
+            VolumeType: gp2
+            DeleteOnTermination: true
+        ImageId: !Ref AmiId
+        InstanceType: !Ref DNSInstanceType
+        KeyName: !Ref KeyName
+        NetworkInterfaces: 
+        - DeviceIndex: 0
+          NetworkInterfaceId: !Ref DNSENI
+        UserData:
+          Fn::Base64: |
+            #!/bin/bash
+            NAMESERVER="169.254.169.253"
+            
+            echo "supersede domain-name-servers ${NAMESERVER};" >> /etc/dhcp/dhclient.conf && dhclient
+            
+            # Install dnsmasq package
+            yum install -y dnsmasq
+            
+            # Create the required User and Group
+            groupadd -r dnsmasq
+            useradd -r -g dnsmasq dnsmasq
+            
+            # Set dnsmasq.conf configuration
+            cat << EOF > /etc/dnsmasq.conf
+            # Server Configuration
+            listen-address=0.0.0.0
+            port=53
+            bind-interfaces
+            user=dnsmasq
+            group=dnsmasq
+            pid-file=/var/run/dnsmasq.pid
+            # Name resolution options
+            resolv-file=/etc/resolv.dnsmasq
+            cache-size=500
+            neg-ttl=60
+            domain-needed
+            bogus-priv
+            EOF
+            
+            # Populate /etc/resolv.dnsmasq
+            echo "nameserver ${NAMESERVER}" > /etc/resolv.dnsmasq
+            
+            # Enable and Start dnsmasq service
+            systemctl stop dnsmasq.service 
+            
+            cat <<EOF> /usr/lib/systemd/system/dnsmasq.service
+            [Unit]
+            Description=DNS caching server.
+            After=network.target
+            
+            [Service]
+            ExecStart=/usr/sbin/dnsmasq -k -q
+            
+            [Install]
+            WantedBy=multi-user.target
+            EOF
+            
+            systemctl daemon-reload
+            systemctl start dnsmasq.service
+            systemctl enable dnsmasq.service
+  
+  DNSASG:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      AvailabilityZones:
+      - Fn::Select:
+        - 0
+        - Fn::GetAZs:
+            Ref: AWS::Region
+      LaunchTemplate:
+        LaunchTemplateId: !Ref DNSLaunchTemplate
+        Version: !GetAtt DNSLaunchTemplate.LatestVersionNumber
+      DesiredCapacity: '1'
+      MinSize: '1'
+      MaxSize: '1'
+      Tags:
+      - Key: Name
+        Value: !Sub "${ClusterName}-dns-1"
+        PropagateAtLaunch: true
+      - Key: auto-delete
+        Value: "no"
+        PropagateAtLaunch: true
+    UpdatePolicy:
+      AutoScalingReplacingUpdate:
+        WillReplace: true
+      AutoScalingRollingUpdate:
+        MinInstancesInService: 1
+        MaxBatchSize: 5
