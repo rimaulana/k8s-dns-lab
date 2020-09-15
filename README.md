@@ -15,7 +15,7 @@ make depcheck
 By default, the script will deploy an EKS cluster named k8s-dns-lab in eu-west-1 region. If you want to change this, modify the parameters.conf file, and adjust the value of variable ClusterName and StackRegion. 
 
 **PLEASE**, adjust the following variables in parameters.conf before deploying:
-- **StackBucket**, the name of the S3 bucket to upload the CFN stack artifacs
+- **StackBucket**, the name of an existing S3 bucket to upload the CFN stack artifacs
 - **StackBucketRegion**, make sure to put the correct region where the bucket reside
 - **KeyName**, make sure this EC2 key name is available in the region where you deploy the Cluster (configured via **StackRegion**)
 
