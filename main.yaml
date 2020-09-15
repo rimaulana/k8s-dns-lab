@@ -10,12 +10,13 @@ Parameters:
   
   K8sVersion:
     Type: String
-    Default: '14'
+    Default: '17'
     Description: Choose Kubernetes version 1.X
     AllowedValues:
-    - '12'
-    - '13'
     - '14'
+    - '15'
+    - '16'
+    - '17'
   
   EnableProxy:
     Type: String
